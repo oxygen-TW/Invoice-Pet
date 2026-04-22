@@ -5,13 +5,10 @@
 
 import { useState, useEffect, useRef, RefObject, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Wand2, Download, RefreshCw, Info, Heart, Shield, Sparkles, QrCode, X, Camera, AlertCircle, Upload } from 'lucide-react';
+import { Download, RefreshCw, Heart, Sparkles, QrCode, X, AlertCircle, Upload } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { GoogleGenAI } from "@google/genai";
 import { Html5Qrcode } from 'html5-qrcode';
 import { generatePetAttributes, generatePixelMap, PetAttributes, PixelData } from './utils/petGenerator';
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export default function App() {
   const [code, setCode] = useState('');
@@ -41,7 +38,7 @@ export default function App() {
           scannerRef.current = scanner;
 
           const config = {
-            fps: 20, 
+            fps: 20,
             qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
               const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
               const qrboxSize = Math.floor(minEdge * 0.7);
@@ -68,7 +65,6 @@ export default function App() {
               // 1. Take a picture (pause video feed)
               try {
                 if (scannerRef.current?.pause) {
-                  console.log("DETECTED");
                   scannerRef.current.pause(true); // pause feed
                 }
               } catch (e) {}
@@ -81,7 +77,7 @@ export default function App() {
               // 2. Analyze
               setTimeout(() => {
                 if (!isMounted) return;
-                
+
                 const match = decodedText.match(/([a-zA-Z]{2})[-]?(\d{8})/);
                 // 3. If we can parse the code: close camera and fill
                 if (match) {
@@ -101,13 +97,13 @@ export default function App() {
                         scannerRef.current.resume();
                       }
                     } catch (e) {}
-                  }, 1200); // Wait 1.2s to show error before resuming
+                  }, 1200);
                 }
-              }, 600); // 600ms fake analysis delay to show the frozen picture
+              }, 600);
             },
             () => {}
           );
-          
+
           scannerPromiseRef.current.then(() => {
             if (isMounted) setScannerStatus('running');
             scannerPromiseRef.current = null;
@@ -203,14 +199,14 @@ export default function App() {
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     let val = e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
-    
+
     // Auto-hyphenation logic
     if (val.length === 2 && !val.includes('-')) {
       val = val + '-';
     } else if (val.length > 2 && val[2] !== '-') {
       val = val.slice(0, 2) + '-' + val.slice(2);
     }
-    
+
     // Limit length to the correct format (AA-XXXXXXXX)
     if (val.length <= 11) {
       setCode(val);
@@ -232,9 +228,9 @@ export default function App() {
     try {
       const attributes = generatePetAttributes(upperCode);
       const grid = generatePixelMap(attributes);
-      
+
       setPet({ attributes, grid, code: upperCode });
-      
+
       // Fire confetti
       confetti({
         particleCount: 100,
@@ -243,36 +239,9 @@ export default function App() {
         colors: [attributes.primaryColor, attributes.secondaryColor, '#ffffff']
       });
 
-      // Generate backstory using Gemini
-      const prompt = `You are a Pixel Pet Scientist. I just discovered a new pet through a secret code. 
-      Attributes:
-      Species: ${attributes.species}
-      Eye Type: ${attributes.eyeType}
-      Pattern: ${attributes.pattern}
-      Accessory: ${attributes.accessory}
-      Primary Color: ${attributes.primaryColor}
-      
-      Return a JSON object with:
-      1. "name": A unique, cool name for this pet.
-      2. "backstory": A short, cute 2-sentence backstory or personality description. 
-      Keep it whimsical and pixel-game themed.`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
-
-      try {
-        const data = JSON.parse(response.text || '{}');
-        setPetName(data.name || attributes.species);
-        setBackstory(data.backstory || 'A mysterious pixel creature from another dimension.');
-      } catch (e) {
-        setPetName(attributes.species);
-        setBackstory(response.text || 'A mysterious pixel creature from another dimension.');
-      }
+      // Use species as pet name
+      setPetName(attributes.species);
+      setBackstory(`A unique ${attributes.species.toLowerCase()} discovered through identity code ${upperCode}.`);
 
     } catch (err) {
       console.error(err);
@@ -284,7 +253,7 @@ export default function App() {
 
   const downloadPet = () => {
     if (!canvasRef.current || !pet) return;
-    
+
     // Create an offscreen canvas for the "Trading Card"
     const card = document.createElement('canvas');
     const ctx = card.getContext('2d');
@@ -298,7 +267,7 @@ export default function App() {
     // 1. Background
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
-    
+
     // 2. Border
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 8;
@@ -309,14 +278,14 @@ export default function App() {
     const petSize = 320;
     const petOffset = (width - petSize) / 2;
     ctx.drawImage(petImg, petOffset, 40, petSize, petSize);
-    
+
     // 4. Draw Name Section
     ctx.fillStyle = '#000000';
     ctx.font = 'bold 24px "Inter", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(petName.toUpperCase(), width / 2, 400);
 
-    // 5. Draw Rarity (Removed ID per request)
+    // 5. Draw Rarity
     const rarity = getRarity(pet.code);
     ctx.fillStyle = rarity === 'LEGENDARY' ? '#d97706' : rarity === 'RARE' ? '#7c3aed' : '#3b82f6';
     ctx.font = 'bold 16px "Inter", sans-serif';
@@ -358,7 +327,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         className="geometric-container w-full max-w-[1000px] min-h-[600px] relative"
@@ -383,14 +352,14 @@ export default function App() {
               <div className="flex justify-between items-end">
                 <label className="label-micro block">Subject Identity Code</label>
                 <div className="flex gap-4">
-                  <button 
+                  <button
                     onClick={() => fileInputRef.current?.click()}
                     className="text-[10px] font-bold text-gray-600 hover:text-black uppercase flex items-center gap-1 transition-colors"
                   >
                     <Upload className="w-3 h-3" />
                     Read Photo
                   </button>
-                  <button 
+                  <button
                     onClick={() => setIsScannerOpen(!isScannerOpen)}
                     className={`text-[10px] font-bold uppercase flex items-center gap-1 transition-colors ${isScannerOpen ? 'text-red-500 hover:text-red-400' : 'text-blue-600 hover:text-blue-500'}`}
                   >
@@ -399,7 +368,7 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              
+
               <AnimatePresence>
                 {isScannerOpen && (
                   <motion.div
@@ -410,7 +379,7 @@ export default function App() {
                   >
                     <div className="relative border-2 border-black mb-4 bg-gray-50 overflow-hidden min-h-[250px] flex items-center justify-center">
                       <div id="qr-reader" className="w-full"></div>
-                      
+
                       {/* Scanning Guide/Box Overlay */}
                       {scannerStatus === 'running' && (
                         <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
@@ -425,7 +394,7 @@ export default function App() {
                           </p>
                         </div>
                       )}
-                      
+
                       {scannerStatus === 'starting' && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 gap-4">
                           <RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
@@ -521,7 +490,7 @@ export default function App() {
             <div className="absolute top-6 left-6 text-[10px] font-bold text-gray-300 uppercase font-mono tracking-widest">
               Visualizer-01 // Output
             </div>
-            
+
             <AnimatePresence mode="wait">
               {!pet ? (
                 <motion.div
@@ -546,13 +515,13 @@ export default function App() {
                   className="relative"
                 >
                   <PetCanvas grid={pet.grid} attrs={pet.attributes} canvasRef={canvasRef} />
-                  
+
                   <div className="absolute -bottom-4 -right-4 bg-yellow-400 border-2 border-black px-4 py-2 font-bold text-xs uppercase shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex items-center gap-2">
                     <Sparkles className="w-3 h-3" />
                     <span>SYNTH_V1.0.SEC</span>
                   </div>
 
-                  <button 
+                  <button
                     onClick={downloadPet}
                     className="absolute -top-4 -right-4 bg-white border-2 border-black p-2 hover:bg-gray-50 transition-colors shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
                   >
@@ -622,7 +591,7 @@ function PetCanvas({ grid, attrs, canvasRef }: { grid: PixelData; attrs: PetAttr
         if (color) {
           ctx.fillStyle = color;
           ctx.fillRect(x * pixelSize, y * pixelSize, pixelSize, pixelSize);
-          
+
           // Slight shading/border for each pixel for depth
           ctx.strokeStyle = 'rgba(0,0,0,0.1)';
           ctx.strokeRect(x * pixelSize, y * pixelSize, pixelSize, pixelSize);
@@ -633,20 +602,11 @@ function PetCanvas({ grid, attrs, canvasRef }: { grid: PixelData; attrs: PetAttr
 
   return (
     <div className="w-[320px] h-[320px] bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] overflow-hidden">
-      <canvas 
-        ref={canvasRef} 
+      <canvas
+        ref={canvasRef}
         className="w-full h-full"
         style={{ imageRendering: 'pixelated' }}
       />
-    </div>
-  );
-}
-
-function AttributeTag({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="space-y-1">
-      <span className="block font-pixel text-[8px] text-neutral-600 uppercase">{label}</span>
-      <span className="block font-pixel text-[10px] text-neutral-300 uppercase">{value}</span>
     </div>
   );
 }
