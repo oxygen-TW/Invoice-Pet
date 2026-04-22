@@ -1,0 +1,8 @@
+{
+  "name": "Pixel Pet Lab",
+  "description": "Generate unique procedural pixel art pets using a secret code.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
