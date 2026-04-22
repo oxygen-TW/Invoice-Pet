@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, RefObject, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Download, RefreshCw, Heart, Sparkles, QrCode, X, AlertCircle, Upload } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { Html5Qrcode } from 'html5-qrcode';
+import { BrowserMultiFormatReader, NotFoundException } from '@zxing/library';
 import { generatePetAttributes, generatePixelMap, PetAttributes, PixelData } from './utils/petGenerator';
 
 export default function App() {
@@ -20,142 +20,156 @@ export default function App() {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [scannerStatus, setScannerStatus] = useState<'idle' | 'starting' | 'running' | 'error' | 'analyzing'>('idle');
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const scannerRef = useRef<BrowserMultiFormatReader | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const scannerPromiseRef = useRef<Promise<any> | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    let timeoutId: any;
     let isMounted = true;
+    let stream: MediaStream | null = null;
+
+    const parseTaiwanEInvoice = (raw: string): string | null => {
+      // Taiwan e-invoice QR is Base64 encoded, 64 characters
+      if (/^[A-Za-z0-9+/=]{64}$/.test(raw.trim())) {
+        try {
+          const decoded = atob(raw.trim());
+          // Format: CompanyID|InvoiceID|Date|Amount|Random|CarrierID...
+          const parts = decoded.split('|');
+          if (parts.length >= 2) {
+            const companyId = parts[0];
+            const invoiceId = parts[1];
+            // Convert to our format: first 2 chars of company ID + invoice ID
+            const alpha = companyId.slice(0, 2).toUpperCase();
+            const numeric = invoiceId.padStart(8, '0').slice(0, 8);
+            return `${alpha}-${numeric}`;
+          }
+        } catch (e) {
+          // Not base64 decodable as valid invoice
+        }
+      }
+      return null;
+    };
+
+    const tryParseCode = (text: string): string | null => {
+      // 1. Try standard format (AA-XXXXXXXX or AXXXXXXXX)
+      const standardMatch = text.match(/([a-zA-Z]{2})[-]?(\d{8})/);
+      if (standardMatch) {
+        return `${standardMatch[1].toUpperCase()}-${standardMatch[2]}`;
+      }
+      // 2. Try Taiwan e-invoice format
+      const einvoiceCode = parseTaiwanEInvoice(text);
+      if (einvoiceCode) return einvoiceCode;
+      return null;
+    };
 
     if (isScannerOpen) {
       setScannerStatus('starting');
-      // Give DOM time to render the 'qr-reader' div
-      timeoutId = setTimeout(() => {
-        if (!isMounted) return;
-        try {
-          const scanner = new Html5Qrcode("qr-reader");
-          scannerRef.current = scanner;
+      const videoElement = document.getElementById('qr-video') as HTMLVideoElement;
 
-          const config = {
-            fps: 20,
-            qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
-              const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-              const qrboxSize = Math.floor(minEdge * 0.7);
-              return { width: qrboxSize, height: qrboxSize };
-            },
-            aspectRatio: 1.0,
-            videoConstraints: {
-              width: { min: 640, ideal: 1920 },
-              height: { min: 480, ideal: 1080 },
-              facingMode: "environment"
-            },
-            experimentalFeatures: {
-              useBarCodeDetectorIfSupported: true
-            }
-          };
+      if (!videoElement) {
+        setScannerStatus('error');
+        setError('Scanner element not found');
+        return;
+      }
 
-          scannerPromiseRef.current = scanner.start(
-            { facingMode: "environment" },
-            config,
-            (decodedText) => {
-              // Prevent multiple triggers
-              if (scannerRef.current?.getState() === 3 /* PAUSED */) return;
+      const reader = new BrowserMultiFormatReader();
+      scannerRef.current = reader;
 
-              // 1. Take a picture (pause video feed)
-              try {
-                if (scannerRef.current?.pause) {
-                  scannerRef.current.pause(true); // pause feed
-                }
-              } catch (e) {}
+      const constraints: MediaStreamConstraints = {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { min: 640, ideal: 1280, max: 1920 },
+          height: { min: 480, ideal: 720, max: 1080 },
+        },
+        audio: false
+      };
 
-              if (isMounted) {
-                setScannerStatus('analyzing');
-                setError('');
+      navigator.mediaDevices.getUserMedia(constraints)
+        .then((mediaStream) => {
+          if (!isMounted) {
+            mediaStream.getTracks().forEach(t => t.stop());
+            return;
+          }
+          stream = mediaStream;
+          videoElement.srcObject = mediaStream;
+          videoElement.playsInline = true;
+          videoElement.muted = true;
+
+          return videoElement.play();
+        })
+        .then(() => {
+          if (!isMounted || !scannerRef.current) return;
+
+          setScannerStatus('running');
+
+          // Use decode in a loop for continuous scanning
+          const decodeLoop = () => {
+            if (!isMounted || !scannerRef.current) return;
+
+            try {
+              // Check if video has enough dimensions (is playing)
+              if (videoElement.readyState < 2) {
+                setTimeout(decodeLoop, 100);
+                return;
               }
 
-              // 2. Analyze
-              setTimeout(() => {
-                if (!isMounted) return;
+              const result = reader.decode(videoElement);
+              if (result && isMounted) {
+                const text = result.getText();
+                setScannerStatus('analyzing');
 
-                const match = decodedText.match(/([a-zA-Z]{2})[-]?(\d{8})/);
-                // 3. If we can parse the code: close camera and fill
-                if (match) {
-                  const alpha = match[1].toUpperCase();
-                  const numeric = match[2];
-                  setCode(`${alpha}-${numeric}`);
+                const parsedCode = tryParseCode(text);
+                if (parsedCode) {
+                  setCode(parsedCode);
                   stopScanner();
+                  return;
                 } else {
-                  // 4. Otherwise keep detecting
                   setError('Invalid format. Resuming scan...');
                   setTimeout(() => {
                     if (!isMounted) return;
                     setError('');
                     setScannerStatus('running');
-                    try {
-                      if (scannerRef.current?.resume) {
-                        scannerRef.current.resume();
-                      }
-                    } catch (e) {}
                   }, 1200);
                 }
-              }, 600);
-            },
-            () => {}
-          );
-
-          scannerPromiseRef.current.then(() => {
-            if (isMounted) setScannerStatus('running');
-            scannerPromiseRef.current = null;
-          }).catch((err) => {
-            console.error("Scanner start error:", err);
-            scannerPromiseRef.current = null;
-            if (isMounted) {
-              setScannerStatus('error');
-              setError('Could not access camera. Please check permissions.');
+              }
+            } catch (err) {
+              if (err instanceof NotFoundException) {
+                // No QR found, continue scanning
+              } else {
+                console.warn('Decode error:', err);
+              }
             }
-          });
-        } catch (err) {
-          console.error("Scanner init error:", err);
+            setTimeout(decodeLoop, 100);
+          };
+
+          decodeLoop();
+        })
+        .catch((err) => {
+          console.error('Camera error:', err);
           if (isMounted) {
             setScannerStatus('error');
             setError('Could not access camera. Please check permissions.');
           }
-        }
-      }, 300);
+        });
     } else {
       stopScanner();
     }
 
     return () => {
       isMounted = false;
-      clearTimeout(timeoutId);
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+      }
       stopScanner();
     };
   }, [isScannerOpen]);
 
-  const stopScanner = async () => {
-    if (scannerPromiseRef.current) {
-      try {
-        await scannerPromiseRef.current;
-      } catch (e) {
-        // Ignored, handled in start
-      }
-    }
-
+  const stopScanner = () => {
     if (scannerRef.current) {
-      try {
-        if (scannerRef.current.isScanning) {
-          await scannerRef.current.stop();
-        }
-        scannerRef.current.clear();
-      } catch (e) {
-        console.warn("Failed to stop scanner smoothly", e);
-      } finally {
-        scannerRef.current = null;
-        setScannerStatus('idle');
-        setIsScannerOpen(false);
-      }
+      scannerRef.current.stopAsyncDecode?.();
+      scannerRef.current = null;
+      setScannerStatus('idle');
+      setIsScannerOpen(false);
     }
   };
 
@@ -166,13 +180,28 @@ export default function App() {
 
     setScannerStatus('analyzing');
     if (isScannerOpen) {
-      await stopScanner();
+      stopScanner();
       setIsScannerOpen(false);
     }
 
     try {
-      const html5QrCode = new Html5Qrcode("qr-file-reader");
-      const decodedText = await html5QrCode.scanFile(file, true);
+      const reader = new BrowserMultiFormatReader();
+      const imageData = await createImageBitmap(file);
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(file);
+
+      await new Promise((resolve) => { img.onload = resolve; });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas context unavailable');
+      ctx.drawImage(img, 0, 0);
+      const imageBitmap = await createImageBitmap(canvas);
+
+      const result = await reader.decodeFromImageElement(img);
+      const decodedText = result.getText();
 
       const match = decodedText.match(/([a-zA-Z]{2})[-]?(\d{8})/);
       if (match) {
@@ -378,7 +407,9 @@ export default function App() {
                     className="overflow-hidden"
                   >
                     <div className="relative border-2 border-black mb-4 bg-gray-50 overflow-hidden min-h-[250px] flex items-center justify-center">
-                      <div id="qr-reader" className="w-full"></div>
+                      <div id="qr-reader" className="w-full">
+                        <video id="qr-video" className="w-full h-full object-cover" playsInline muted></video>
+                      </div>
 
                       {/* Scanning Guide/Box Overlay */}
                       {scannerStatus === 'running' && (
@@ -555,8 +586,7 @@ export default function App() {
           </div>
         </footer>
       </motion.div>
-      <div id="qr-file-reader" className="hidden"></div>
-    </div>
+          </div>
   );
 }
 
